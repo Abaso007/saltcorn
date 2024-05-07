@@ -10,6 +10,5 @@ def wait_for_port_open(url):
     except:
       print("Closed, retry")
       time.sleep(0.25)
-      i=i+1
-      pass
+      i += 1
   raise ValueError("wait_for_port_open: Iterations exceeded")

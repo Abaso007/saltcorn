@@ -47,14 +47,14 @@ def install_files(cxn):
     rootDir = './files'
     for dirName, subdirList, fileList in os.walk(rootDir):
         cDir = dirName.replace('./files', '')
-        print("Entering Directory: %s" % cDir)
+        print(f"Entering Directory: {cDir}")
         if cDir:
-            cxn.run("mkdir -p %s" % cDir)
+            cxn.run(f"mkdir -p {cDir}")
         for fname in fileList:
             cwd = os.getcwd()
-            rpath = cDir + '/' + fname
-            lpath = cwd + '/files' + cDir + '/' + fname
-            print('Moving File: %s' % lpath)
+            rpath = f'{cDir}/{fname}'
+            lpath = f'{cwd}/files{cDir}/{fname}'
+            print(f'Moving File: {lpath}')
             cxn.put(lpath, rpath)
 
 
@@ -69,9 +69,9 @@ def install_pkgs(cxn):
     cxn.run(r'apt-get -qqy update')
     cxn.run(r'apt-get -qqy -o Dpkg::Options::="--force-confdef" '
             r'-o Dpkg::Options::="--force-confold" upgrade')
-    cxn.run(r'apt-get -qqy -o Dpkg::Options::="--force-confdef" '
-            r'-o Dpkg::Options::="--force-confold" install {}'
-            .format(APT_PACKAGES))
+    cxn.run(
+        f'apt-get -qqy -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold" install {APT_PACKAGES}'
+    )
 
     # example 3rd paty repo and install certbot
     # cxn.run('apt-get -qqy install software-properties-common')
@@ -91,14 +91,14 @@ def run_scripts(cxn):
     print('--------------------------------------------------')
 
     cwd = os.getcwd()
-    directory = cwd + '/scripts'
+    directory = f'{cwd}/scripts'
 
     for f in sorted(os.listdir(directory)):
-        lfile = cwd + '/scripts/' + f
-        rfile = '/tmp/' + f
-        print("Processing script in %s" % lfile)
+        lfile = f'{cwd}/scripts/{f}'
+        rfile = f'/tmp/{f}'
+        print(f"Processing script in {lfile}")
         cxn.put(lfile, rfile)
-        cxn.run("chmod +x %s" % rfile)
+        cxn.run(f"chmod +x {rfile}")
         cxn.run(rfile)
 
 

@@ -63,25 +63,25 @@ class Test:
         assert self.sess.redirect_url == '/auth/signup'
     def test_needs_long_password(self):
         self.sess.reset()
-        self.sess.get('/auth/signup') 
+        self.sess.get('/auth/signup')
         self.sess.postForm('/auth/signup', 
             {'email': 'thebestuser16@mail.com',  
             'password': 'pass', 
             '_csrf': self.sess.csrf()
             })
         assert "Password too short" in self.sess.content
-        assert self.sess.redirect_url == None
+        assert self.sess.redirect_url is None
 
     def test_needs_strong_password(self):
         self.sess.reset()
-        self.sess.get('/auth/signup') 
+        self.sess.get('/auth/signup')
         self.sess.postForm('/auth/signup', 
             {'email': 'thebestuser16@mail.com',  
             'password': 'password1', 
             '_csrf': self.sess.csrf()
             })
         assert "Password too common" in self.sess.content
-        assert self.sess.redirect_url == None
+        assert self.sess.redirect_url is None
 
 
     def test_signup_no_csrf(self):
