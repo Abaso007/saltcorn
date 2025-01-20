@@ -296,6 +296,7 @@ class Table implements AbstractTable {
     const { getState } = require("../db/state");
 
     const provider = getState().table_providers[tbl.provider_name];
+    if (!provider) return this;
     const { getRows } = provider.get_table(tbl.provider_cfg, tbl);
 
     const { json_list_to_external_table } = require("../plugin-helper");
@@ -394,7 +395,9 @@ class Table implements AbstractTable {
       if (t.provider_name) {
         const { getState } = require("../db/state");
         const provider = getState().table_providers[t.provider_name];
-        t.fields = await applyAsync(provider.fields, t.provider_cfg);
+        if (provider)
+          t.fields = await applyAsync(provider.fields, t.provider_cfg);
+        else t.fields = [];
       } else
         t.fields = flds
           .filter((f: any) => f.table_id === t.id)
@@ -1995,6 +1998,50 @@ class Table implements AbstractTable {
       });
       for (const row of rows) {
         await refTable?.updateRow({}, row[refTable.pk_name]);
+      }
+    }
+
+    // expressions involving joinfields. uses attribute set by
+    // Field.set_calc_joinfields
+    const stored_fields = await Field.find(
+      {
+        calculated: true,
+        stored: true,
+      },
+      { cached: true }
+    );
+    for (const field of stored_fields) {
+      if (!field.attributes.calc_joinfields) continue;
+      const matchings = field.attributes.calc_joinfields.filter(
+        (jf: any) => jf.targetTable === this.name
+      );
+      if (!matchings.length) continue;
+      const refTable =
+        (field.table as Table) || Table.findOne({ id: field.table_id });
+      for (const matching of matchings) {
+        if (matching.through?.length === 1) {
+          // select readings where patient_id.favbook = v.id
+          // select reftable where field.through[0] = v.id
+          const rows = await refTable!.getRows({
+            [matching.field]: {
+              inSelect: {
+                table: matching.throughTable[0],
+                field: "id",
+                tenant: db.isSQLite ? undefined : db.getTenantSchema(),
+                where: { [matching.through[0]]: v[this.pk_name] },
+              },
+            },
+          });
+          for (const row of rows)
+            await refTable?.updateRow({}, row[refTable.pk_name]);
+        } else {
+          //no through
+          const rows = await refTable!.getRows({
+            [matching.field]: v[this.pk_name],
+          });
+          for (const row of rows)
+            await refTable?.updateRow({}, row[refTable.pk_name]);
+        }
       }
     }
   }
