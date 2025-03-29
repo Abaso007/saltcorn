@@ -971,6 +971,14 @@ module.exports = {
       const newRow = { ...row };
       table.getFields();
       delete newRow[table.pk_name];
+      for (const field of table.fields)
+        if (
+          field.is_fkey &&
+          typeof newRow[field.name] === "object" &&
+          newRow[field.name]?.id
+        )
+          newRow[field.name] = newRow[field.name].id; //TODO non-id pks
+
       await table.insertRow(newRow, user);
     },
     namespace: "Database",
@@ -1954,14 +1962,19 @@ module.exports = {
 
         const existingRow = dest_rows.find((r) => r[pk_field] === existPK);
 
-        const is_different_for_key = (k) => newRow[k] !== existingRow[k];
+        const is_different_for_key = (k) => newRow[k] != existingRow[k];
 
-        if (Object.keys(newRow).some(is_different_for_key))
+        if (Object.keys(newRow).some(is_different_for_key)) {
+          const upd = {};
+          Object.keys(newRow).forEach((k) => {
+            if (is_different_for_key(k)) upd[k] = newRow[k];
+          });
           await table_for_insert.updateRow(
-            newRow,
+            upd,
             existingRow[table_for_insert.pk_name],
             user
           );
+        }
       }
     },
     namespace: "Database",
