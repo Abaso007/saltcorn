@@ -196,6 +196,8 @@ admin_config_route({
     { section_header: "Extension store" },
     "plugins_store_endpoint",
     "packs_store_endpoint",
+    "maintenance_mode_enabled",
+    "maintenance_mode_page",
   ],
   response(form, req, res) {
     send_admin_page({
@@ -3841,6 +3843,22 @@ router.post(
       spawnParams.push("--androidKeyStoreAlias", keystoreAlias);
     if (keystorePassword)
       spawnParams.push("--androidKeystorePassword", keystorePassword);
+
+    // if builDir exists, remove it
+    if (
+      await fs.promises
+        .access(buildDir)
+        .then(() => true)
+        .catch(() => false)
+    ) {
+      try {
+        await fs.promises.rm(buildDir, { recursive: true, force: true });
+        getState().log(5, `Removed existing build directory: ${buildDir}`);
+      } catch (error) {
+        getState().log(4, `Error removing build directory: ${error.message}`);
+      }
+    }
+
     // end http call, return the out directory name, the build directory path and the mode
     // the gui polls for results
     res.json({

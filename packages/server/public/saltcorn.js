@@ -538,7 +538,7 @@ function saveAndContinue(e, k, event) {
         form.append(
           `<input type="hidden" class="form-control  " name="id" value="${res.id}">`
         );
-        reloadEmbeddedEditOwnViews(form, res.id);
+        apply_showif();
       }
       common_done(res, form.attr("data-viewname"));
       if (focusedEl) focusedEl.setAttribute("previous-val", focusedEl.value);
@@ -1336,6 +1336,14 @@ function check_delete_unsaved(tablename, script_tag) {
         },
       });
   }
+}
+
+function delprevwfroomrun(viewname, e, runid) {
+  e.preventDefault();
+  e.stopPropagation();
+  view_post(viewname, "delprevrun", { run_id: runid });
+  $(e.target).closest(".prevwfroomrun").remove();
+  return false;
 }
 
 function cfu_translate(that) {
