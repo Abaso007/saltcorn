@@ -290,7 +290,7 @@ export class MobileBuilder {
         this.pluginsLoaded = true;
       }
       copyPluginMobileAppDirs(this.buildDir);
-      if (this.pushNotificationsEnabled)
+      if (this.pushNotificationsEnabled || this.pushSync)
         copyOptionalSource(this.buildDir, "notifications.js");
       if (this.syncInterval && this.syncInterval > 0)
         copyOptionalSource(this.buildDir, "background_sync.js");

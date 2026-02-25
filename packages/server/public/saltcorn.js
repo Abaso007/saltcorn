@@ -1229,7 +1229,7 @@ function check_ios_build_deps() {
   $.ajax("/admin/mobile-app/check-ios-build-tools", {
     type: "GET",
     success: function (res) {
-      const { xcodebuild, cocoapods, isMac } = res;
+      const { xcodebuild, cocoapods, iosRuntime, isMac } = res;
       if (isMac) {
         // update xcodebuild status
         if (xcodebuild.installed) {
@@ -1257,6 +1257,17 @@ function check_ios_build_deps() {
           );
         } else {
           $("#cocoapodsStatusId").html(
+            `not available<i class="p-2 fas fa-times text-danger"></i>`
+          );
+        }
+
+        // update iOS runtime status
+        if (iosRuntime && iosRuntime.available) {
+          $("#iosRuntimeStatusId").html(
+            `${iosRuntime.version}<i class="p-2 fas fa-check text-success"></i>`
+          );
+        } else {
+          $("#iosRuntimeStatusId").html(
             `not available<i class="p-2 fas fa-times text-danger"></i>`
           );
         }

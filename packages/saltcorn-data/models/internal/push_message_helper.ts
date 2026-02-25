@@ -309,7 +309,14 @@ export class PushMessageHelper {
               try {
                 if (!this.apnsClient)
                   throw new Error("APNS client not initialized");
-                await this.apnsClient.send(sn);
+                const response = await this.apnsClient.send(sn);
+                this.state.log(
+                  5,
+                  `silent APNS notification sent successfully to '${deviceId}', ` +
+                    `type: '${response.pushType}', priority: '${
+                      response.priority
+                    }', 'options: ${JSON.stringify(response.options)}`
+                );
               } catch (err: any) {
                 console.error(err);
               }
@@ -411,7 +418,10 @@ export class PushMessageHelper {
       const response = await this.apnsClient.send(apnsNotification);
       this.state.log(
         5,
-        `APNS notification sent successfully: ${JSON.stringify(response)}`
+        `APNS notification sent successfully to '${sub.deviceId}', ` +
+          `type: '${response.pushType}', priority: '${
+            response.priority
+          }', 'options: ${JSON.stringify(response.options)}`
       );
     } catch (err: any) {
       this.state.log(

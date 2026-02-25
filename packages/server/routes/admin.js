@@ -2479,6 +2479,34 @@ const checkCocoaPods = () => {
   });
 };
 
+const checkIosRuntime = () => {
+  return new Promise((resolve) => {
+    exec("xcrun simctl list runtimes --json", (error, stdout) => {
+      if (error) {
+        resolve({ available: false });
+      } else {
+        try {
+          const data = JSON.parse(stdout);
+          const runtimes = data.runtimes || [];
+          const iosRuntimes = runtimes.filter(
+            (r) => r.isAvailable && r.name && r.name.startsWith("iOS")
+          );
+          if (iosRuntimes.length > 0) {
+            resolve({
+              available: true,
+              version: iosRuntimes[iosRuntimes.length - 1].name,
+            });
+          } else {
+            resolve({ available: false });
+          }
+        } catch (e) {
+          resolve({ available: false });
+        }
+      }
+    });
+  });
+};
+
 const versFullfilled = (version, minMajVersion) => {
   const vTokens = version.split(".");
   const majVers = parseInt(vTokens[0]);
@@ -2496,6 +2524,8 @@ const buildIosConfigBox = ({
   xcodebuildVersion,
   cocoaPodsAvailable,
   cocoaPodsVersion,
+  iosRuntimeAvailable,
+  iosRuntimeVersion,
   provisioningFiles,
   allAppCfgFiles,
   builderSettings,
@@ -2577,6 +2607,29 @@ const buildIosConfigBox = ({
                     i({
                       class: `fas p-2 ${
                         cocoaPodsFullfilled
+                          ? "fa-check text-success"
+                          : "fa-times text-danger"
+                      }`,
+                    })
+                  )
+                )
+              ),
+              div(
+                {
+                  class: "row",
+                },
+                // iOS runtime status
+                div(
+                  { class: "col-sm-4" },
+                  div({ class: "fw-bold form-label label" }, "iOS runtime"),
+                  span(
+                    { id: "iosRuntimeStatusId" },
+                    iosRuntimeAvailable
+                      ? span(iosRuntimeVersion)
+                      : span(req.__("not available")),
+                    i({
+                      class: `fas p-2 ${
+                        iosRuntimeAvailable
                           ? "fa-check text-success"
                           : "fa-times text-danger"
                       }`,
@@ -2903,6 +2956,9 @@ router.get(
     const cocoaPodCheckRes = await checkCocoaPods();
     const cocoaPodsAvailable = cocoaPodCheckRes.installed;
     const cocoaPodsVersion = cocoaPodCheckRes.version;
+    const iosRuntimeCheckRes = await checkIosRuntime();
+    const iosRuntimeAvailable = iosRuntimeCheckRes.available;
+    const iosRuntimeVersion = iosRuntimeCheckRes.version;
     const layout = getState().getLayout(req.user);
     const isSbadmin2 = layout === getState().layouts.sbadmin2;
     const isEntrypointByRole = builderSettings.entryPointByRole === "on";
@@ -4245,6 +4301,8 @@ router.get(
                     xcodebuildVersion,
                     cocoaPodsAvailable,
                     cocoaPodsVersion,
+                    iosRuntimeAvailable,
+                    iosRuntimeVersion,
                     provisioningFiles,
                     allAppCfgFiles,
                     builderSettings,
@@ -4842,8 +4900,9 @@ router.get(
   error_catcher(async (req, res) => {
     const xcodebuild = await checkXcodebuild();
     const cocoapods = await checkCocoaPods();
+    const iosRuntime = await checkIosRuntime();
     const isMac = process.platform === "darwin";
-    res.json({ xcodebuild, cocoapods, isMac });
+    res.json({ xcodebuild, cocoapods, iosRuntime, isMac });
   })
 );
 
