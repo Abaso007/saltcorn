@@ -107,7 +107,7 @@ const select = async (tbl, whereObj, selectopts = Object.create(null)) => {
   const { where, values } = mkWhere(whereObj);
   const schema = selectopts.schema || getTenantSchema();
   let sql;
-  if (selectopts.tree_field)
+  if (selectopts.tree_field && !whereObj[selectopts.tree_field])
     sql = `WITH RECURSIVE _tree AS (
       SELECT ${
         selectopts.fields ? selectopts.fields.join(", ") : `*`
