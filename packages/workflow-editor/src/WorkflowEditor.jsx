@@ -487,9 +487,16 @@ const buildGraph = (
       id: `e-start-${initial.id}`,
       source: "start",
       target: String(initial.id),
-      type: "smoothstep",
+      type: "workflow-main",
       animated: true,
       markerEnd: makeMarker(),
+      data: {
+        startLabel: strings.start,
+        sourceStepName: "start",
+        sourceId: "start",
+        targetId: String(initial.id),
+        canInsertBetween: true,
+      },
     });
   else {
     const addId = "add-start";
@@ -620,7 +627,7 @@ const buildGraph = (
   });
 
   const addNodes = [];
-  if (!steps.length) {
+  if (!initial) {
     const addId = "add-start";
     addNodes.push({
       id: addId,
@@ -706,10 +713,16 @@ const StepDrawer = ({
   error,
   data,
   onDelete,
+  onCopy,
   drawerWidth,
   onResizeStart,
 }) => {
   const isOpen = !!modal;
+  const stopDrawerKeyPropagation = useCallback((e) => {
+    e.stopPropagation();
+    if (e?.nativeEvent?.stopImmediatePropagation)
+      e.nativeEvent.stopImmediatePropagation();
+  }, []);
   return (
     <div
       ref={outerRef}
@@ -719,6 +732,8 @@ const StepDrawer = ({
       aria-hidden={!isOpen}
       aria-label={modal?.title || data?.strings?.configure}
       style={{ "--wf-drawer-width": `${drawerWidth}px` }}
+      onKeyDown={stopDrawerKeyPropagation}
+      onKeyUp={stopDrawerKeyPropagation}
     >
       {modal ? (
         <>
@@ -752,6 +767,17 @@ const StepDrawer = ({
             >
               {data.strings.deleteStep}
             </button>
+            {modal.stepId ? (
+              <button
+                className="btn btn-sm btn-outline-secondary"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onCopy(modal.stepId);
+                }}
+              >
+                {data.strings.copyStep || "Copy"}
+              </button>
+            ) : null}
             <button className="btn btn-secondary" onClick={onClose}>
               Close
             </button>
@@ -807,6 +833,9 @@ const WorkflowEditor = ({ data }) => {
   const resizingRef = useRef(false);
   const connectSourceRef = useRef(null);
   const [selectedEdgeId, setSelectedEdgeId] = useState(null);
+  const autoSaveTimerRef = useRef(null);
+  const autoSavingRef = useRef(false);
+  const nodesRef = useRef([]);
 
   const drawerStorageKey = useMemo(
     () => `wf-drawer:${data?.trigger?.id || "default"}`,
@@ -914,10 +943,12 @@ const WorkflowEditor = ({ data }) => {
       )
         return;
       if (e.key !== "Delete" && e.key !== "Backspace") return;
-      const stepNode = selectedNodes.find((n) => n.type === "step");
-      if (!stepNode) return;
+      const stepIds = selectedNodes
+        .filter((n) => n.type === "step")
+        .map((n) => n.id);
+      if (!stepIds.length) return;
       e.preventDefault();
-      onDelete(stepNode.id);
+      onDelete(stepIds);
     },
     [modal, onDelete, selectedNodes]
   );
@@ -952,6 +983,10 @@ const WorkflowEditor = ({ data }) => {
   useEffect(() => {
     refreshGraph(steps);
   }, [steps, refreshGraph]);
+
+  useEffect(() => {
+    nodesRef.current = nodes;
+  }, [nodes]);
 
   useEffect(() => {
     if (!rfInstanceRef.current) return;
@@ -1070,25 +1105,33 @@ const WorkflowEditor = ({ data }) => {
     setError("");
     try {
       let fresh = await fetchJson(data.urls.data);
+      let updatedSteps = null;
 
       // If a step was just added via an adder node, wire up next_step
       if (pendingAddRef.current) {
-        const { afterStepId, prevIds, insertBetween } = pendingAddRef.current;
+        const { afterStepId, prevIds, insertBetween, fromStart } =
+          pendingAddRef.current;
         const newSteps = (fresh.steps || []).filter(
           (s) => !prevIds.has(String(s.id))
         );
         if (newSteps.length === 1) {
           const newStep = newSteps[0];
           if (insertBetween && insertBetween.originalTargetName) {
-            // Insert new step between source and its former target
-            await updateConnection({
-              step_id: newStep.id,
-              next_step: insertBetween.originalTargetName,
-            });
-            await updateConnection({
-              step_id: afterStepId,
-              next_step: newStep.name,
-            });
+            if (fromStart) {
+              await updateConnection({
+                step_id: newStep.id,
+                initial_step: true,
+              });
+            } else {
+              await updateConnection({
+                step_id: newStep.id,
+                next_step: insertBetween.originalTargetName,
+              });
+              await updateConnection({
+                step_id: afterStepId,
+                next_step: newStep.name,
+              });
+            }
           } else {
             await updateConnection({
               step_id: afterStepId,
@@ -1098,20 +1141,32 @@ const WorkflowEditor = ({ data }) => {
 
           // Re-fetch so we get the updated connections reflected in steps
           fresh = await fetchJson(data.urls.data);
+
+          if (insertBetween && insertBetween.originalTargetName) {
+            updatedSteps = await applyInsertBetweenLayout(fresh.steps || [], {
+              newStep,
+              afterStepId,
+              targetName: insertBetween.originalTargetName,
+              targetId: insertBetween.targetId,
+              snapshot: insertBetween.positionsSnapshot,
+            });
+          }
         }
         pendingAddRef.current = null;
       }
 
-      setSteps(fresh.steps || []);
+      const nextSteps = updatedSteps || fresh.steps || [];
+      setSteps(nextSteps);
 
       setMessage(strings.refresh);
       setTimeout(() => setMessage(""), 1200);
+      return nextSteps;
     } catch (e) {
       setError(e.message);
     } finally {
       setLoading(false);
     }
-  }, [data.urls.data, fetchJson, strings.refresh, updateConnection]);
+  }, [applyInsertBetweenLayout, data.urls.data, fetchJson, strings.refresh, updateConnection]);
 
   const persistPositions = useCallback(
     async (positions = []) => {
@@ -1163,6 +1218,98 @@ const WorkflowEditor = ({ data }) => {
       }, 300);
     },
     [persistPositions]
+  );
+
+  const applyLocalPositionUpdates = useCallback(
+    (updates = []) => {
+      if (!updates.length) return;
+      setNodes((nds) =>
+        nds.map((n) => {
+          const hit = updates.find((u) => String(u.id) === String(n.id));
+          return hit
+            ? { ...n, position: { ...(n.position || {}), x: hit.x, y: hit.y } }
+            : n;
+        })
+      );
+    },
+    [setNodes]
+  );
+
+  const applyInsertBetweenLayout = useCallback(
+    async (freshSteps, { newStep, afterStepId, targetName, targetId, snapshot }) => {
+      if (!newStep || !snapshot) return null;
+      const snap = snapshot || {};
+      const newStepSize =
+        getWorkflowSize(newStep) || {
+          width: DEFAULT_NODE_WIDTH,
+          height: DEFAULT_NODE_HEIGHT,
+        };
+      const sourceSnap = snap[String(afterStepId)];
+      const resolvedTargetId =
+        targetId || freshSteps.find((s) => s.name === targetName)?.id;
+      const targetSnap = resolvedTargetId ? snap[String(resolvedTargetId)] : null;
+      const shiftAmount = newStepSize.height + V_GAP;
+      const fallbackY = sourceSnap?.y ?? 0;
+      const fallbackX = sourceSnap?.x ?? targetSnap?.x ?? 0;
+      const newY = targetSnap?.y ?? fallbackY;
+      const newX =
+        sourceSnap && targetSnap
+          ? (sourceSnap.x + targetSnap.x) / 2
+          : targetSnap?.x ?? sourceSnap?.x ?? fallbackX;
+
+      const newHalfWidth = (newStepSize.width || DEFAULT_NODE_WIDTH) / 2;
+      const bandPadding = H_GAP / 2;
+      const bandMinX = newX - newHalfWidth - bandPadding;
+      const bandMaxX = newX + newHalfWidth + bandPadding;
+
+      const updates = [];
+      freshSteps.forEach((step) => {
+        const idStr = String(step.id);
+        const nodeSnap = snap[idStr];
+
+        if (idStr === String(newStep.id)) {
+          updates.push({ id: idStr, x: newX, y: newY });
+          return;
+        }
+
+        if (!nodeSnap) return;
+
+        const nodeWidth = nodeSnap.width || DEFAULT_NODE_WIDTH;
+        const nodeHalfWidth = nodeWidth / 2;
+        const nodeMinX = nodeSnap.x - nodeHalfWidth;
+        const nodeMaxX = nodeSnap.x + nodeHalfWidth;
+        const overlapsBand = !(nodeMaxX < bandMinX || nodeMinX > bandMaxX);
+        const shouldShift =
+          nodeSnap.y >= newY &&
+          idStr !== String(afterStepId) &&
+          overlapsBand;
+
+        if (shouldShift) {
+          updates.push({ id: idStr, x: nodeSnap.x, y: nodeSnap.y + shiftAmount });
+        } else {
+          updates.push({ id: idStr, x: nodeSnap.x, y: nodeSnap.y });
+        }
+      });
+      if (!updates.length) return freshSteps;
+
+      applyLocalPositionUpdates(updates);
+
+      const stepsWithPositions = freshSteps.map((s) => {
+        const hit = updates.find((u) => String(u.id) === String(s.id));
+        if (!hit) return s;
+        return {
+          ...s,
+          configuration: {
+            ...(s.configuration || {}),
+            workflow_position: { x: hit.x, y: hit.y },
+          },
+        };
+      });
+
+      await persistPositions(updates);
+      return stepsWithPositions;
+    },
+    [applyLocalPositionUpdates, persistPositions]
   );
 
   useEffect(() => {
@@ -1232,8 +1379,8 @@ const WorkflowEditor = ({ data }) => {
     [clearDrawerState, data.urls.stepForm, fetchJson, persistDrawerState]
   );
 
-  const handleModalSubmit = useCallback(
-    async (formEl) => {
+  const submitStepForm = useCallback(
+    async (formEl, { closeOnSuccess = true } = {}) => {
       if (!formEl) return;
       setSavingModal(true);
       setError("");
@@ -1249,9 +1396,12 @@ const WorkflowEditor = ({ data }) => {
       });
       const json = await res.json();
       if (json.error) throw new Error(json.error);
-      setModal(null);
-      clearDrawerState();
+      if (closeOnSuccess) {
+        setModal(null);
+        clearDrawerState();
+      }
       await reload();
+      setSavingModal(false);
     },
     [clearDrawerState, data.csrfToken, data.urls.stepForm, reload]
   );
@@ -1270,6 +1420,7 @@ const WorkflowEditor = ({ data }) => {
     }, 0);
 
     const actionSelect = formEl.querySelector('[name="wf_action_name"]');
+    const allowAutoSave = !!modal?.stepId; // avoid auto-save for brand new steps to prevent insert errors
     const handleActionChange = () => {
       if (typeof window !== "undefined" && window.apply_showif)
         window.apply_showif();
@@ -1277,10 +1428,29 @@ const WorkflowEditor = ({ data }) => {
     if (actionSelect)
       actionSelect.addEventListener("change", handleActionChange);
 
+    const scheduleAutoSave = allowAutoSave
+      ? () => {
+          if (autoSavingRef.current) return;
+          if (autoSaveTimerRef.current)
+            clearTimeout(autoSaveTimerRef.current);
+          autoSaveTimerRef.current = setTimeout(async () => {
+            autoSavingRef.current = true;
+            try {
+              await submitStepForm(formEl, { closeOnSuccess: false });
+            } catch (err) {
+              setError(err.message);
+            } finally {
+              autoSavingRef.current = false;
+              setSavingModal(false);
+            }
+          }, 800);
+        }
+      : null;
+
     const submitHandler = async (e) => {
       e.preventDefault();
       try {
-        await handleModalSubmit(formEl);
+        await submitStepForm(formEl);
       } catch (err) {
         setError(err.message);
       } finally {
@@ -1288,12 +1458,22 @@ const WorkflowEditor = ({ data }) => {
       }
     };
     formEl.addEventListener("submit", submitHandler);
+    if (scheduleAutoSave) {
+      formEl.addEventListener("input", scheduleAutoSave);
+      formEl.addEventListener("change", scheduleAutoSave);
+    }
     return () => {
+      if (autoSaveTimerRef.current)
+        clearTimeout(autoSaveTimerRef.current);
       formEl.removeEventListener("submit", submitHandler);
+      if (scheduleAutoSave) {
+        formEl.removeEventListener("input", scheduleAutoSave);
+        formEl.removeEventListener("change", scheduleAutoSave);
+      }
       if (actionSelect)
         actionSelect.removeEventListener("change", handleActionChange);
     };
-  }, [handleModalSubmit, modal]);
+  }, [modal, submitStepForm]);
 
   useEffect(() => {
     if (typeof window === "undefined") return undefined;
@@ -1400,11 +1580,23 @@ const WorkflowEditor = ({ data }) => {
       if (targetEl?.classList?.contains("react-flow__pane")) {
         // Dropped on empty space: clear next_step mark as final/unconnected
         if (pending.nodeId && pending.handleId !== "loop-out") {
-          onClearNext(pending.nodeId);
+          if (pending.nodeId === "start") {
+            const currentInitial = steps.find((s) => s.initial_step);
+            if (currentInitial) {
+              updateConnection({
+                step_id: currentInitial.id,
+                initial_step: false,
+              })
+                .then(() => reload())
+                .catch((e) => setError(e.message));
+            }
+          } else {
+            onClearNext(pending.nodeId);
+          }
         }
       }
     },
-    [onClearNext]
+    [onClearNext, reload, steps, updateConnection]
   );
 
   const onEdgesChange = useCallback(
@@ -1494,15 +1686,46 @@ const WorkflowEditor = ({ data }) => {
 
   const onInsertBetween = useCallback(
     ({ source, target }) => {
-      if (!source || !target || source === "start") return;
+      if (!source || !target) return;
       const originalTargetName = nameById[target];
       if (!originalTargetName) return;
+      const fromStart = source === "start";
+      const sizeById = new Map(
+        steps.map((s) => [
+          String(s.id),
+          getWorkflowSize(s) || {
+            width: DEFAULT_NODE_WIDTH,
+            height: DEFAULT_NODE_HEIGHT,
+          },
+        ])
+      );
+      const positionsSnapshot = {};
+      nodesRef.current
+        .filter((n) => n.type === "step")
+        .forEach((n) => {
+          const size =
+            sizeById.get(String(n.id)) ||
+            { width: DEFAULT_NODE_WIDTH, height: DEFAULT_NODE_HEIGHT };
+          positionsSnapshot[String(n.id)] = {
+            x: n.position?.x ?? 0,
+            y: n.position?.y ?? 0,
+            width: size.width || DEFAULT_NODE_WIDTH,
+            height: size.height || DEFAULT_NODE_HEIGHT,
+          };
+        });
       pendingAddRef.current = {
-        afterStepId: source,
+        afterStepId: fromStart ? "start" : source,
         prevIds: new Set(steps.map((s) => String(s.id))),
-        insertBetween: { originalTargetName },
+        fromStart,
+        insertBetween: {
+          originalTargetName,
+          targetId: target,
+          positionsSnapshot,
+        },
       };
-      openStepForm({ after_step: source });
+      openStepForm(
+        fromStart ? { initial_step: true } : { after_step: source }
+      );
     },
     [nameById, openStepForm, steps]
   );
@@ -1515,6 +1738,118 @@ const WorkflowEditor = ({ data }) => {
     [reload, updateConnection]
   );
 
+  const onCopy = useCallback(
+    async (id) => {
+      try {
+        setError("");
+        const res = await fetchJson(data.urls.copy, {
+          method: "POST",
+          body: JSON.stringify({ step_id: id }),
+          headers: {
+            "X-CSRF-Token": data.csrfToken || "",
+          },
+        });
+
+        if (!res || res.success !== "ok" || !res.step) {
+          await reload();
+          return;
+        }
+        
+        const copiedStep = res.step;
+        const copiedName = copiedStep.name;
+
+        // Reload full workflow data so the new step has
+        // the same serialized shape as all other steps
+        const freshSteps = (await reload()) || [];
+        if (!freshSteps.length) return;
+
+        const sourceStep = freshSteps.find(
+          (s) => String(s.id) === String(id)
+        );
+        const newStep = freshSteps.find((s) => s.name === copiedName);
+
+        if (!sourceStep || !newStep || !newStep.id) return;
+
+        const sourceSize =
+          getWorkflowSize(sourceStep) || {
+            width: DEFAULT_NODE_WIDTH,
+            height: DEFAULT_NODE_HEIGHT,
+          };
+        const newSize =
+          getWorkflowSize(newStep) || {
+            width: DEFAULT_NODE_WIDTH,
+            height: DEFAULT_NODE_HEIGHT,
+          };
+
+        const sourcePos = sourceStep.configuration?.workflow_position || {
+          x: 0,
+          y: 0,
+        };
+
+        // Desired location: directly to the right of the source step
+        const targetX = sourcePos.x + sourceSize.width + ADD_GAP;
+        const targetY = sourcePos.y;
+
+        const updates = [];
+
+        // Push steps that are to the right of the insertion band
+        const bandMinX = targetX - newSize.width * 0.25;
+        const shiftX = newSize.width + ADD_GAP;
+
+        freshSteps.forEach((s) => {
+          const cfgPos = s.configuration?.workflow_position;
+          if (!cfgPos) return;
+          if (String(s.id) === String(newStep.id)) return;
+          if (cfgPos.x >= bandMinX) {
+            updates.push({
+              id: String(s.id),
+              x: cfgPos.x + shiftX,
+              y: cfgPos.y,
+            });
+          }
+        });
+
+        // Position for the new copied step
+        updates.push({
+          id: String(newStep.id),
+          x: targetX,
+          y: targetY,
+        });
+
+        if (!updates.length) return;
+
+        // Move nodes immediately in the UI
+        applyLocalPositionUpdates(updates);
+
+        // Update local steps state with new positions
+        const stepsWithPositions = freshSteps.map((s) => {
+          const hit = updates.find((u) => u.id === String(s.id));
+          if (!hit) return s;
+          return {
+            ...s,
+            configuration: {
+              ...(s.configuration || {}),
+              workflow_position: { x: hit.x, y: hit.y },
+            },
+          };
+        });
+
+        setSteps(stepsWithPositions);
+        await persistPositions(updates);
+      } catch (e) {
+        setError(e.message);
+      }
+    },
+    [
+      data.csrfToken,
+      data.urls.copy,
+      fetchJson,
+      applyLocalPositionUpdates,
+      persistPositions,
+      reload,
+    ]
+  );
+
   const onClearNext = useCallback(
     async (id) => {
       await updateConnection({ step_id: id, next_step: "" });
@@ -1524,15 +1859,29 @@ const WorkflowEditor = ({ data }) => {
   );
 
   const onDelete = useCallback(
-    async (id) => {
-      if (!window.confirm(strings.confirmDelete)) return;
+    async (ids) => {
+      const normalizedIds = Array.isArray(ids) ? ids : [ids];
+      const uniqueIds = [...new Set(normalizedIds.map((id) => String(id)))];
+      if (!uniqueIds.length) return;
+
+      const singleConfirm = strings.confirmDelete || "Delete step?";
+      const confirmMessage =
+        uniqueIds.length > 1
+          ? strings.confirmDeleteMany ||
+            `${singleConfirm} (${uniqueIds.length} steps)`
+          : singleConfirm;
+
+      if (!window.confirm(confirmMessage)) return;
+
       try {
-        const formData = new FormData();
-        formData.append("_csrf", data.csrfToken || "");
-        await fetchJson(`${data.urls.deleteStep}/${id}`, {
-          method: "POST",
-          body: formData,
-        });
+        for (const id of uniqueIds) {
+          const formData = new FormData();
+          formData.append("_csrf", data.csrfToken || "");
+          await fetchJson(`${data.urls.deleteStep}/${id}`, {
+            method: "POST",
+            body: formData,
+          });
+        }
         setModal(null);
         setError("");
         clearDrawerState();
@@ -1541,7 +1890,14 @@ const WorkflowEditor = ({ data }) => {
         setError(e.message);
       }
     },
-    [clearDrawerState, data.csrfToken, fetchJson, reload, strings.confirmDelete]
+    [
+      clearDrawerState,
+      data.csrfToken,
+      fetchJson,
+      reload,
+      strings.confirmDelete,
+      strings.confirmDeleteMany,
+    ]
   );
 
   useEffect(() => {
@@ -1777,6 +2133,7 @@ const WorkflowEditor = ({ data }) => {
         error={error && modal ? error : ""}
         data={data}
         onDelete={onDelete}
+        onCopy={onCopy}
         drawerWidth={drawerWidth}
         onResizeStart={startResize}
       />
