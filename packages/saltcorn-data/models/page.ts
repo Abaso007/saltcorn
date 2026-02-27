@@ -32,10 +32,7 @@ const { script, domReady, div } = tags;
 const { eval_expression } = expression;
 
 const { remove_from_menu } = config;
-const {
-  action_link,
-  fill_presets,
-} = require("../viewable_fields");
+const { action_link, fill_presets } = require("../viewable_fields");
 import utils from "../utils";
 const { run_action_column, stateToQueryString } = require("../plugin-helper");
 
@@ -470,6 +467,7 @@ class Page implements AbstractPage {
             .map((s) => s.trim())
             .filter(Boolean)) {
             const [anm, aval] = attrStr.split("=");
+            if (!aval) continue;
             attrs[anm] = aval.replaceAll('"', "");
           }
           const { viewname, ...embedstate } = attrs;
